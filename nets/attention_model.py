@@ -103,12 +103,12 @@ class AttentionModel(nn.Module):
                 self.project_node_step = nn.Linear(1, 3 * embedding_dim, bias=False)
         elif self.is_para or self.is_rpara:
             # Embedding of robot initial node and last node
-            step_context_dim = 2 * embedding_dim
+            step_context_dim = embedding_dim
 
             node_dim = 4  # [xi, yi, xj, yj]  shelf:i!=j, return:i==j
 
-            # Special embedding projection for robot initial node
-            self.init_embed_robot = nn.Linear(2, embedding_dim)
+            # Special embedding projection for robot initial node and last node
+            self.init_embed_robot = nn.Linear(4, embedding_dim)
 
         else:  # TSP
             assert problem.NAME == "tsp", "Unsupported problem: {}".format(problem.NAME)
@@ -158,6 +158,7 @@ class AttentionModel(nn.Module):
         """
         if self.is_para or self.is_rpara:
             input['return_loc'] = torch.cat((input['return_loc'], input['return_loc']), -1)
+            input['robot'] = torch.cat((input['robot'], input['robot']), -1)[:, None, :]  # robot_loc 信息包括起始位置与当前位置
 
         _log_p, pi = self._inner(input)
 
@@ -214,10 +215,7 @@ class AttentionModel(nn.Module):
     def _calc_log_likelihood(self, _log_p, a, mask):
 
         # Get log_p corresponding to selected actions
-        # print('log_p: ', _log_p, _log_p.shape)
         log_p = _log_p.gather(2, a.unsqueeze(-1)).squeeze(-1)
-        # print('log_p: ', log_p, log_p.shape)
-        # print(_log_p.gather(2, a.unsqueeze(-1)), _log_p.gather(2, a.unsqueeze(-1)).shape)
 
         # Optional: mask out actions irrelevant to objective so they do not get reinforced
         if mask is not None:
@@ -251,7 +249,7 @@ class AttentionModel(nn.Module):
         elif self.is_para or self.is_rpara:
             return torch.cat(
                 (
-                    self.init_embed_robot(input['robot'])[:, None, :],
+                    self.init_embed_robot(input['robot']),
                     self.init_embed(
                         torch.cat((input['ss_loc'], input['return_loc']), 1)
                     )  #
@@ -270,82 +268,48 @@ class AttentionModel(nn.Module):
 
         batch_size = state.ids.size(0)
         if self.is_para or self.is_rpara:
-            graph_size = state.ss_loc.size(1) + state.return_loc.size(1)
-        elif self.is_vrp:
-            # print(state.coords.shape)
-            graph_size = state.coords.shape[1] - 1
-        else:
-            graph_size = state.loc.size(1)
+            # graph_size = state.ss_loc.size(1) + state.return_loc.size(1)
+            graph_size = state.n_loc
 
         # Perform decoding steps
         i = 0
 
-        if self.is_vrp:
-            mask = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['loc'].device)
-        elif self.is_para:
-            mask = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['robot'].device)
-            visited_loc = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['robot'].device)
-        elif self.is_rpara:
+        if self.is_rpara:
             mask = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['robot'].device)
             visited_shelf = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['robot'].device)
             visited_return = torch.zeros(batch_size, 1, graph_size + 1).to(input_copy['robot'].device)
-        else:
-            mask = torch.zeros(batch_size, 1, graph_size).to(state.ids.device)
 
         while not (self.shrink_size is None and state.all_finished()):
-            if self.is_vrp:
-                embeddings, init_context = self.embedder(self._init_embed(input_copy), mask=mask, is_vrp=True)
-
-                mask_tmp = (~torch.tensor(mask, dtype=torch.bool).to(input_copy['loc'].device)).\
-                    view(batch_size, graph_size+1, 1).repeat(1, 1, self.embedding_dim).float()
-                non_mask_count = mask_tmp.sum(dim=1)
-                init_context = torch.sum(embeddings * mask_tmp, dim=1) / non_mask_count
-
-            elif self.is_para:
+            if self.is_para:
                 mask_loc = visited_loc
                 embeddings, init_context = self.embedder(self._init_embed(input_copy), mask=mask_loc, is_vrp=False,
                                                          is_para=True)  # mask_loc是否起作用
 
-                mask_tmp = (~torch.tensor(visited_loc, dtype=torch.bool).to(input_copy['robot'].device)).\
+                mask_tmp = (~torch.tensor(visited_loc, dtype=torch.bool).to(input_copy['robot'].device)). \
                     view(batch_size, graph_size + 1, 1).repeat(1, 1, self.embedding_dim).float()
                 non_mask_count = mask_tmp.sum(dim=1)
                 init_context = torch.sum(embeddings * mask_tmp, dim=1) / non_mask_count
             elif self.is_rpara:
                 mask_loc = visited_return
-                embeddings, init_context = self.embedder(self._init_embed(input_copy), mask=mask_loc, is_vrp=False,
-                                                         is_para=True)
+                embeddings, _ = self.embedder(self._init_embed(input_copy), mask=mask_loc, is_vrp=False,
+                                              is_para=True)
                 mask_tmp = (~torch.tensor(visited_return, dtype=torch.bool).to(input_copy['robot'].device)). \
                     view(batch_size, graph_size + 1, 1).repeat(1, 1, self.embedding_dim).float()
                 non_mask_count = mask_tmp.sum(dim=1)
-                # print('non_mask_count: ', non_mask_count)
                 init_context = torch.sum(embeddings * mask_tmp, dim=1) / non_mask_count
-            else:
-                # keep the first node for tsp
-                if i > 0:
-                    mask_tmp = mask ^ mask_first
-                    embeddings, init_context = self.embedder(input_copy, mask=mask_tmp)
-                    mask_tmp = (~mask_tmp).view(batch_size, graph_size, 1).repeat(1, 1, 128).float()
-                    init_context = torch.sum(embeddings * mask_tmp, dim=1) / (graph_size+1 - i)
-                else:
-                    # print('em mask: ', mask)
-                    embeddings, init_context = self.embedder(input_copy, mask=mask)
-                    init_context = torch.sum(embeddings, dim=1) / graph_size  #
 
             # Compute keys, values for the glimpse and keys for the logits once as they can be reused in every step
             fixed = self._precompute(embeddings, init_context)
             if self.is_para or self.is_rpara:
                 log_p, mask = self._get_log_p(fixed, state, is_para=True)
-            else:
-                log_p, mask = self._get_log_p(fixed, state, is_para=False)
 
             # Select the indices of the next nodes in the sequences, result (batch_size) long
             selected = self._select_node(log_p.exp()[:, 0, :], mask[:, 0, :])  # Squeeze out steps dimension
-            # print('mask: ', mask)
-            # print('selected: ', selected)
 
             # update state and input
             state = state.update(selected)
             input_copy['ss_loc'] = state.ss_loc
+            input_copy['robot'] = state.robot_loc
 
             if self.is_para:
                 mask, visited_loc = state.get_mask()
@@ -355,7 +319,7 @@ class AttentionModel(nn.Module):
                 mask = state.get_mask()
             if not self.is_vrp and i == 0 and not self.is_para and not self.is_rpara:
                 mask_first = mask
-            # print('mask new: ', mask)
+
             # Collect output of step
             outputs.append(log_p[:, 0, :])
             sequences.append(selected)
@@ -410,9 +374,8 @@ class AttentionModel(nn.Module):
 
         # The projection of the node embeddings for the attention is calculated once up front
         glimpse_key_fixed, glimpse_val_fixed, logit_key_fixed = \
-            self.project_node_embeddings(embeddings[:, None, :, :]).chunk(3, dim=-1)  # [batch_size, 1, graph_size+1, embedding_dim]
-        # print('gli: ', glimpse_key_fixed.shape)
-
+            self.project_node_embeddings(embeddings[:, None, :, :]).chunk(3,
+                                                                          dim=-1)  # [batch_size, 1, graph_size+1, embedding_dim]
         # No need to rearrange key for logit as there is a single head
         fixed_attention_node_data = (
             self._make_heads(glimpse_key_fixed, num_steps),
@@ -441,21 +404,18 @@ class AttentionModel(nn.Module):
                 self.project_step_context(self._get_parallel_step_context(fixed.node_embeddings, state))
 
         # Compute keys and values for the nodes
-        glimpse_K, glimpse_V, logit_K = self._get_attention_node_data(fixed, state)  # [n_heads, batch_size, 1, graph_size+1, embedding_dim/n_heads]
+        glimpse_K, glimpse_V, logit_K = self._get_attention_node_data(fixed,
+                                                                      state)  # [n_heads, batch_size, 1, graph_size+1, embedding_dim/n_heads]
 
         # Compute the mask
         if is_para:
             mask, _ = state.get_mask()
-        else:
-            mask = state.get_mask()
 
         # Compute logits (unnormalized log_p)
         log_p, glimpse = self._one_to_many_logits(query, glimpse_K, glimpse_V, logit_K, mask)
 
         if normalize:
-            # print('log_p: ', log_p, log_p.shape)
             log_p = F.log_softmax(log_p / self.temp, dim=-1)
-        # print('log: ', log_p, log_p.shape)
         assert not torch.isnan(log_p).any()
 
         return log_p, mask
@@ -472,88 +432,15 @@ class AttentionModel(nn.Module):
 
         current_node = state.get_current_node()
         batch_size, num_steps = current_node.size()
-        # print('current node: ', current_node, batch_size, num_steps)
 
-        if self.is_vrp:
-            # Embedding of previous node + remaining capacity
-            if from_depot:
-                # 1st dimension is node idx, but we do not squeeze it since we want to insert step dimension
-                # i.e. we actually want embeddings[:, 0, :][:, None, :] which is equivalent
-                return torch.cat(
-                    (
-                        embeddings[:, 0:1, :].expand(batch_size, num_steps, embeddings.size(-1)),
-                        # used capacity is 0 after visiting depot
-                        self.problem.VEHICLE_CAPACITY - torch.zeros_like(state.used_capacity[:, :, None])
-                    ),
-                    -1
-                )
-            else:
-                return torch.cat(
-                    (
-                        torch.gather(
-                            embeddings,
-                            1,
-                            current_node.contiguous()
-                                .view(batch_size, num_steps, 1)
-                                .expand(batch_size, num_steps, embeddings.size(-1))
-                        ).view(batch_size, num_steps, embeddings.size(-1)),
-                        self.problem.VEHICLE_CAPACITY - state.used_capacity[:, :, None]
-                    ),
-                    -1
-                )
-        elif self.is_para or self.is_rpara:
+        if self.is_para or self.is_rpara:
             # 第一个节点即robot initial loc，和上一个动作prev_a
             first_a = torch.zeros(batch_size, 1, dtype=torch.int64).to(embeddings.device)
             return embeddings.gather(
                 1,
-                torch.cat((first_a, current_node), 1)[:, :, None].expand(batch_size, 2,
-                                                                         embeddings.size(-1))
-            ).view(batch_size, 1, -1)  # [batch_size , 1, 2*embedding_dim]
+                first_a[:, :, None].expand(batch_size, 1, embeddings.size(-1))
+            ).view(batch_size, 1, -1)  # [batch_size , 1, embedding_dim]
 
-        elif self.is_orienteering or self.is_pctsp:
-            return torch.cat(
-                (
-                    torch.gather(
-                        embeddings,
-                        1,
-                        current_node.contiguous()
-                            .view(batch_size, num_steps, 1)
-                            .expand(batch_size, num_steps, embeddings.size(-1))
-                    ).view(batch_size, num_steps, embeddings.size(-1)),
-                    (
-                        state.get_remaining_length()[:, :, None]
-                        if self.is_orienteering
-                        else state.get_remaining_prize_to_collect()[:, :, None]
-                    )
-                ),
-                -1
-            )
-        else:  # TSP
-
-            if num_steps == 1:  # We need to special case if we have only 1 step, may be the first or not
-                if state.i.item() == 0:
-                    # First and only step, ignore prev_a (this is a placeholder)
-                    return self.W_placeholder[None, None, :].expand(batch_size, 1, self.W_placeholder.size(-1))
-                else:
-                    return embeddings.gather(
-                        1,
-                        torch.cat((state.first_a, current_node), 1)[:, :, None].expand(batch_size, 2,
-                                                                                       embeddings.size(-1))
-                    ).view(batch_size, 1, -1)
-            # More than one step, assume always starting with first
-            embeddings_per_step = embeddings.gather(
-                1,
-                current_node[:, 1:, None].expand(batch_size, num_steps - 1, embeddings.size(-1))
-            )
-            return torch.cat((
-                # First step placeholder, cat in dim 1 (time steps)
-                self.W_placeholder[None, None, :].expand(batch_size, 1, self.W_placeholder.size(-1)),
-                # Second step, concatenate embedding of first with embedding of current/previous (in dim 2, context dim)
-                torch.cat((
-                    embeddings_per_step[:, 0:1, :].expand(batch_size, num_steps - 1, embeddings.size(-1)),
-                    embeddings_per_step
-                ), 2)
-            ), 1)
 
     def _one_to_many_logits(self, query, glimpse_K, glimpse_V, logit_K, mask):
 
@@ -588,7 +475,6 @@ class AttentionModel(nn.Module):
             logits = torch.tanh(logits) * self.tanh_clipping
         if self.mask_logits:
             logits[mask.bool()] = -math.inf
-        # print('logit: ', logits, logits.shape)
         return logits, glimpse.squeeze(-2)
 
     def _get_attention_node_data(self, fixed, state):
@@ -606,7 +492,7 @@ class AttentionModel(nn.Module):
                 fixed.logit_key + logit_key_step,
             )
 
-        # TSP or VRP without split delivery
+        #
         return fixed.glimpse_key, fixed.glimpse_val, fixed.logit_key
 
     def _make_heads(self, v, num_steps=None):

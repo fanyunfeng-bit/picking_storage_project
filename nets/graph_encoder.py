@@ -187,7 +187,6 @@ class MultiHeadAttentionLayer(nn.Sequential):
         super(MultiHeadAttentionLayer, self).__init__(*args_tuple)
 
     def forward(self, input, mask=None):
-        # print('forward mask: ', mask)
         for module in self._modules.values():
             if isinstance(module, SkipConnection):
                 input = module(input, mask=mask)
@@ -322,7 +321,6 @@ class GraphAttentionEncoder(nn.Module):
             t_input = t_input.view(batch_size, 2, 2)
             x = torch.bmm(x, t_input)
         mask = mask.float() * (-math.inf)
-
         mask[mask != mask] = 0
         if is_vrp:
             mask = mask.view(batch_size, 1, graph_size).repeat(1, graph_size, 1)
@@ -330,12 +328,12 @@ class GraphAttentionEncoder(nn.Module):
             mask = mask.view(batch_size, 1, graph_size).repeat(1, graph_size, 1)
         else:
             mask = mask.view(batch_size, 1, graph_size).repeat(1, graph_size, 1)
+
         # Batch multiply to get initial embeddings of nodes
         if is_vrp or is_para:
             h = x
         else:
             h = self.init_embed(x.view(-1, x.size(-1))).view(*x.size()[:2], -1) if self.init_embed is not None else x
-        # print('h mask: ', mask, mask.shape)
         h = self.layers(h, mask=mask)
 
         if self.hierarchy_block != None:
@@ -346,7 +344,6 @@ class GraphAttentionEncoder(nn.Module):
             distance = torch.sqrt(torch.sum((x - cluster_center[-1].view(-1, 1, 2)) ** 2, 2))
 
             num = 1
-            # print(num, torch.max(distance), torch.sum(torch.max(distance, dim=1)[0] > radius))
 
             while torch.max(distance) > radius:
                 _, index = torch.max(distance, dim=1)
@@ -359,7 +356,6 @@ class GraphAttentionEncoder(nn.Module):
                 distance[torch.max(distance, dim=1)[0] > radius] = torch.min(distance_new_cluster, distance[
                     torch.max(distance, dim=1)[0] > radius])
                 num += 1
-                # print(num, torch.max(distance), torch.sum(torch.max(distance, 1)[0] > radius))
 
             cluster_center = torch.cat([i.view(batch_size, 1, 2) for i in cluster_center], dim=1)
             cluster_size = cluster_center.shape[1]
@@ -368,7 +364,6 @@ class GraphAttentionEncoder(nn.Module):
                              x.view(batch_size, 1, graph_size, 2).repeat(1, cluster_center.shape[1], 1, 1)
             # cluster_points = (torch.sum(cluster_points ** 2, dim=3) <= radius).float()
             cluster_points = (torch.sqrt(torch.sum(cluster_points ** 2, dim=3)) <= radius).float()
-            # print (torch.sum(cluster_points))
 
             cluster_points = cluster_points / torch.sum(cluster_points, dim=2).view(batch_size, cluster_size, 1)
             cluster_points[cluster_points != cluster_points] = 0

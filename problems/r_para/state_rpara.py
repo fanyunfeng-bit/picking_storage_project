@@ -2,12 +2,13 @@ import torch
 from typing import NamedTuple
 from utils.boolmask import mask_long2bool, mask_long_scatter
 import numpy as np
+import copy
 
 
 class StateRPARA(NamedTuple):
     # Fixed input
     # coords: torch.Tensor  # robot + shelf_loc + station_loc + return_loc
-    robot_loc: torch.Tensor  # 单机---类比为depot
+    robot_loc: torch.Tensor  # 包括初始位置和当前位置信息
     ss_loc: torch.Tensor  # shelf-station 二元组 n x 1 x 4，分别为二者的坐标
     return_loc: torch.Tensor  # m x 1 x 2
     n_loc: torch.Tensor  # n + m
@@ -57,9 +58,9 @@ class StateRPARA(NamedTuple):
     @staticmethod
     def initialize(input, visited_dtype=torch.uint8):
 
-        robot = input['robot']
-        ss_loc = input['ss_loc']
-        return_loc = input['return_loc']
+        robot = copy.deepcopy(input['robot'])
+        ss_loc = copy.deepcopy(input['ss_loc'])
+        return_loc = copy.deepcopy(input['return_loc'])
 
         batch_size, n_shelf, _ = ss_loc.size()
         _, n_return, _ = return_loc.size()
@@ -67,7 +68,7 @@ class StateRPARA(NamedTuple):
 
         return StateRPARA(
             # coords=torch.cat((torch.cat((torch.cat((robot[:, None, :], shelf_loc), -2), station_loc), -2), return_loc), -2),
-            robot_loc=robot[:, None, :],
+            robot_loc=robot,
             ss_loc=ss_loc,
             # station_loc=station_loc,
             return_loc=return_loc,
@@ -101,7 +102,7 @@ class StateRPARA(NamedTuple):
                 else torch.zeros(batch_size, 1, (n_loc + 63) // 64, dtype=torch.int64, device=ss_loc.device)  # Ceil
             ),
             lengths=torch.zeros(batch_size, 1, device=ss_loc.device),
-            cur_coord=input['robot'][:, None, :],  # Add step dimension
+            cur_coord=robot[:, 0, -2:],  # Add step dimension
             i=torch.zeros(1, dtype=torch.int64, device=ss_loc.device)  # Vector with length num_steps
         )
 
@@ -114,12 +115,11 @@ class StateRPARA(NamedTuple):
                torch.abs(self.robot_loc[self.ids, 0, 1] - self.cur_coord[1])  # 加上回到初始位置的距离
 
     def all_finished(self):
-        # print(self.i.item() >= self.demand.size(-1) and self.visited.all())
         # 选择一个shelf对应一个return位，shelf与station的关系确定，self.i只在选择shelf和return时加一！！！！
         return self.i.item() >= self.ss_loc.size(-2) * 2 and self.visited_[:, :, 1:self.ss_loc.size(1) + 1].all()
 
     def update(self, selected):
-
+        
         assert self.i.size(0) == 1, "Can only update if state represents single step"
 
         # Update the state
@@ -165,13 +165,16 @@ class StateRPARA(NamedTuple):
 
         if (selected <= n_shelf).all():
             self.ss_loc[self.ids, selected - 1, 2:] = self.ss_loc[self.ids, selected - 1, :2]  # 被选择过的shelf对应station清空
-            # print('self.ss_loc: ', self.ss_loc)
-            # print(self.ids)
 
+        r_c = copy.deepcopy(self.robot_loc)
+        r_c[:, :, -2:] = c_c
         return self._replace(
             prev_a=prev_a, visited_=visited_, ss_loc=self.ss_loc, visited_shelf=visited_shelf,
-            visited_return=visited_return, lengths=lengths, cur_coord=c_c, i=self.i + 1
+            visited_return=visited_return, lengths=lengths, cur_coord=c_c, i=self.i + 1, robot_loc=r_c
         )
+        
+
+
 
     def get_current_node(self):
         return self.prev_a

@@ -30,7 +30,7 @@ def validate(model, dataset, opts):
 def rollout(model, dataset, opts):
     # Put in greedy evaluation mode!
     set_decode_type(model, "greedy")
-    model.eval()
+    # model.eval()
 
     def eval_model_bat(bat):
         with torch.no_grad():
@@ -68,7 +68,6 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
     print("Start train epoch {}, lr={} for run {}".format(epoch, optimizer.param_groups[0]['lr'], opts.run_name))
     step = epoch * (opts.epoch_size // opts.batch_size)
     start_time = time.time()
-    # lr_scheduler.step(epoch)
 
     if not opts.no_tensorboard:
         tb_logger.log_value('learnrate_pg0', optimizer.param_groups[0]['lr'], step)
@@ -85,6 +84,7 @@ def train_epoch(model, optimizer, baseline, lr_scheduler, epoch, val_dataset, pr
     # Put model in train mode!
     model.train()
     set_decode_type(model, "sampling")
+    torch.autograd.set_detect_anomaly(True)
 
     for batch_id, batch in enumerate(tqdm(training_dataloader, disable=opts.no_progress_bar)):
 
@@ -154,7 +154,9 @@ def train_batch(
 
     # Calculate loss
     reinforce_loss = ((cost - bl_val) * log_likelihood).mean()
+
     loss = reinforce_loss + bl_loss
+
     if opts.input_transform != None:
         loss += opts.input_transform * transform_loss
 
@@ -164,7 +166,6 @@ def train_batch(
     # Clip gradient norms and get (clipped) gradient norms for logging
     grad_norms = clip_grad_norms(optimizer.param_groups, opts.max_grad_norm)
     optimizer.step()
-    # lr_scheduler.step()
 
     # Logging
     if step % int(opts.log_step) == 0:

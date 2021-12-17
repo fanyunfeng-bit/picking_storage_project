@@ -17,21 +17,19 @@ class RPARA(object):
     def get_costs(dataset, pi):
         batch_size, ss_size, _ = dataset['ss_loc'].size()
         _, r_size, _ = dataset['return_loc'].size()
-        # print('pi: ', pi, pi.shape)
 
         # Gather dataset in order of tour
-        r_padding = nn.ZeroPad2d(padding=(0, 2, 0, 0))
-        robot_loc = r_padding(dataset['robot'])[:, None, :]
-        robot_ss_return = torch.cat((torch.cat((robot_loc, dataset['ss_loc']), 1), dataset['return_loc']), 1)
+        # r_padding = nn.ZeroPad2d(padding=(0, 2, 0, 0))
+        # robot_loc = r_padding(dataset['robot'])[:, None, :]
+        robot_ss_return = torch.cat((torch.cat((dataset['robot'], dataset['ss_loc']), 1),
+                                     dataset['return_loc']), 1)
 
         d = robot_ss_return.gather(1, pi[..., None].expand(*pi.size(), robot_ss_return.size(-1)))
-        # print('d: ', d, d.shape)
 
         # 将变成回归位置的货架对应拣选站坐标清空
         for jj in range(d.size(1)):
             if jj % 2 == 1:
                 d[:, jj, 2:] = d[:, jj, :2]
-        # print('d: ', d)
         # Length is distance (L2-norm of difference) of each next location to its prev and of first and last to depot
         distance = 0
         for i in range(d.size(1) - 1):
@@ -41,10 +39,9 @@ class RPARA(object):
             distance += dist
 
         # Depot to first and Last to depot, will be 0 if depot is last
-        distance += torch.abs(d[:, 0, 0] - dataset['robot'][:, 0]) + torch.abs(d[:, 0, 1] - dataset['robot'][:, 1]) + \
-                    torch.abs(d[:, -1, 2] - dataset['robot'][:, 0]) + torch.abs(d[:, -1, 3] - dataset['robot'][:, 1])
+        distance += torch.abs(d[:, 0, 0] - dataset['robot'][:, 0, 0]) + torch.abs(d[:, 0, 1] - dataset['robot'][:, 0, 1]) + \
+                    torch.abs(d[:, -1, 2] - dataset['robot'][:, 0, 0]) + torch.abs(d[:, -1, 3] - dataset['robot'][:, 0, 1])
 
-        # print(distance)
         return distance, None
 
     @staticmethod
@@ -101,6 +98,7 @@ class R_PARADataset(Dataset):
             self.data = [make_instance(args) for args in data[offset:offset + num_samples]]
 
         else:
+            
             valid_row = np.array([2, 3, 6, 7, 10, 11, 14, 15])
             valid_col = np.array([2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27])
             stations = np.array([[6, 0], [11, 0], [17, 4], [17, 11], [17, 18], [17, 25], [11, 29], [6, 29]])
@@ -113,7 +111,8 @@ class R_PARADataset(Dataset):
                     col = np.random.choice(valid_col)
                     if [row, col] not in locs:
                         locs.append([row, col])
-                robot = torch.zeros(2)
+                robot = torch.FloatTensor([np.random.randint(0, 18), np.random.randint(0, 29)])
+                # robot = torch.zeros(2)
                 shelf_loc = torch.FloatTensor(locs[:ss_size])
                 return_loc = torch.FloatTensor(locs[ss_size:])
 
@@ -127,6 +126,7 @@ class R_PARADataset(Dataset):
                     'ss_loc': ss_loc,
                     'return_loc': return_loc
                 })
+            
 
             # self.data = [
             #     {

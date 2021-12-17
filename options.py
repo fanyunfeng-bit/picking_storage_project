@@ -11,9 +11,9 @@ def get_options(args=None):
     # Data
     parser.add_argument('--problem', default='r_para', help="The problem to solve, default 'tsp'")
     parser.add_argument('--graph_size', type=int, default=20, help="The size of the problem graph")
-    parser.add_argument('--batch_size', type=int, default=512, help='Number of instances per batch during training')
-    parser.add_argument('--epoch_size', type=int, default=1280000, help='Number of instances per epoch during training')
-    parser.add_argument('--val_size', type=int, default=1000,
+    parser.add_argument('--batch_size', type=int, default=10, help='Number of instances per batch during training')
+    parser.add_argument('--epoch_size', type=int, default=128000, help='Number of instances per epoch during training')
+    parser.add_argument('--val_size', type=int, default=1024,
                         help='Number of instances used for reporting validation performance')
     parser.add_argument('--val_dataset', type=str, default=None, help='Dataset file to use for validation')
     parser.add_argument('--num_neighbor', type=int, default=None, help='number of neighbor points to do self attention')
@@ -72,15 +72,15 @@ def get_options(args=None):
     parser.add_argument('--output_dir', default='outputs', help='Directory to write output models to')
     parser.add_argument('--epoch_start', type=int, default=0,
                         help='Start at epoch # (relevant for learning rate decay)')
-    parser.add_argument('--checkpoint_epochs', type=int, default=1,
+    parser.add_argument('--checkpoint_epochs', type=int, default=10,
                         help='Save checkpoint every n epochs (default 1), 0 to save no checkpoints')
     parser.add_argument('--load_path', help='Path to load model parameters and optimizer state from')
     parser.add_argument('--resume', help='Resume from previous checkpoint file')
     parser.add_argument('--no_tensorboard', action='store_true', help='Disable logging TensorBoard files')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
 
-    parser.add_argument('--ss_size', type=int, default=6)
-    parser.add_argument('--r_size', type=int, default=6)
+    parser.add_argument('--ss_size', type=int, default=10)
+    parser.add_argument('--r_size', type=int, default=10)
 
     opts = parser.parse_args(args)
 

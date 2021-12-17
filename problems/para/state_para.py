@@ -99,10 +99,8 @@ class StatePARA(NamedTuple):
     def update(self, selected):
 
         assert self.i.size(0) == 1, "Can only update if state represents single step"
-        # print('selected: ', selected)
         # Update the state
         selected = selected[:, None]  # Add dimension for step
-        # print(selected)
         prev_a = selected
         n_shelf = self.ss_loc.size(-2)  #
         # n_station = self.station_loc.size(-2)
